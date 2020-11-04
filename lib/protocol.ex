@@ -6,9 +6,9 @@ defmodule ExLumber.Protocol do
 
   @code_version "2"
   @code_window_size "W"
-	@code_json_data_frame "J"
-	@code_compressed "C"
-	@code_ack "A"
+  @code_json_data_frame "J"
+  @code_compressed "C"
+  @code_ack "A"
 
   def start_link(ref, socket, transport) do
     Logger.info("Starting server")
@@ -40,12 +40,13 @@ defmodule ExLumber.Protocol do
     cursor = advance(cursor, 4)
 
     events = read_events(data, cursor, count)
+
     transport.send(socket, data)
     {:noreply, state}
   end
 
-  def read_events(data, cursor, count, events \\ []) do
-    for _i <- 0..count do
+  defp read_events(data, cursor, count) do
+    Enum.flat_map(0..count, fn _ ->
       version_binary = :binary.part(data, {cursor, 1})
       version = List.to_string([version_binary])
       cursor = advance(cursor, 1)
@@ -55,20 +56,37 @@ defmodule ExLumber.Protocol do
 
       case type do
         @code_json_data_frame ->
-          IO.inspect("JSON frame")
+          {event, cursor} = read_json(data, cursor)
+          [event]
         @code_compressed ->
           {uncompressed, cursor} = read_compressed(data, cursor)
-          events = [events | read_events(uncompressed, 0, 0)]
+          read_events(uncompressed, 0, 0)
         _ ->
           Logger.error("Unknown frame type #{type}")
+          []
       end
-    end
+    end)
+  end
+
+  defp read_json(data, cursor) do
+    seq = :binary.part(data, {cursor, 4})
+    |> :binary.decode_unsigned(:big)
+    cursor = advance(cursor, 4)
+
+    payload_size = :binary.part(data, {cursor, 4})
+    |> :binary.decode_unsigned(:big)
+    cursor = advance(cursor, 4)
+
+    payload = :binary.part(data, {cursor, payload_size})
+
+    {List.to_string([payload]), advance(cursor, payload_size)}
   end
 
   defp read_compressed(data, cursor) do
     payload_size = min(
       byte_size(data) - cursor - 4,
-      :binary.part(data, {cursor, 4}) |> :binary.decode_unsigned(:big)
+      :binary.part(data, {cursor, 4})
+      |> :binary.decode_unsigned(:big)
     )
     cursor = advance(cursor, 4)
 
