@@ -24,34 +24,39 @@ defmodule ExLumber.Protocol do
     :gen_server.enter_loop(__MODULE__, [], %{socket: socket, transport: transport})
   end
 
-
   def handle_info({:tcp, socket, data}, state = %{socket: socket, transport: transport}) do
     cursor = 0
 
     version_binary = :binary.part(data, {cursor, 1})
-    version = List.to_string([version_binary])
     cursor = advance(cursor, 1)
-
     type_binary = :binary.part(data, {cursor, 1})
-    type = List.to_string([type_binary])
     cursor = advance(cursor, 1)
 
-    count = :binary.part(data, {cursor, 4}) |> :binary.decode_unsigned(:big)
-    cursor = advance(cursor, 4)
+    if @code_version != "#{version_binary}" or
+    @code_binary_window != "#{type_binary}" do
+      Logger.error("Expected Window frame version 2. Received #{type_binary} version #{version_binary}")
+    else
+      count = :binary.part(data, {cursor, 4}) |> :binary.decode_unsigned(:big)
+      cursor = advance(cursor, 4)
 
-    events = read_events(data, cursor, count)
+      events = read_events(data, cursor, count)
 
-    transport.send(socket, data)
+      ack_frame = (Enum.count(events) - 1)
+      |> ack()
+
+      transport.send(socket, ack_frame)
+    end
+
     {:noreply, state}
   end
 
   defp read_events(data, cursor, count) do
     Enum.flat_map(0..count, fn _ ->
       version_binary = :binary.part(data, {cursor, 1})
-      version = List.to_string([version_binary])
+      version = "#{version_binary}"
       cursor = advance(cursor, 1)
       type_binary = :binary.part(data, {cursor, 1})
-      type = List.to_string([type_binary])
+      type = "#{type_binary}"
       cursor = advance(cursor, 1)
 
       case type do
@@ -101,6 +106,14 @@ defmodule ExLumber.Protocol do
 
   defp advance(cursor, byte_count) do
     cursor + byte_count
+  end
+
+  defp ack(n) do
+    [
+      :unicode.characters_to_binary(@code_version),
+      :unicode.characters_to_binary(@code_ack),
+      <<n::32>>
+    ]
   end
 
   def handle_info({:tcp_closed, socket}, state = %{socket: socket, transport: transport}) do
