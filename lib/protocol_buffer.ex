@@ -4,14 +4,14 @@ defmodule ExLumber.ProtocolBuffer do
 
   @behaviour :ranch_protocol
 
-  def start_link(ref, socket, transport, reader) do
+  @impl true
+  def start_link(ref, socket, transport) do
     Logger.info("Starting server")
-    pid = :proc_lib.spawn_link(__MODULE__, :init, [{ref, socket, transport, reader}])
+    pid = :proc_lib.spawn_link(__MODULE__, :init, [ref, socket, transport])
     {:ok, pid}
   end
 
-  @impl true
-  def init({ref, _socket, transport, reader}) do
+  def init(ref, transport, _opts) do
     Logger.info("Starting protocol")
 
     {:ok, socket} = :ranch.handshake(ref)
@@ -20,11 +20,12 @@ defmodule ExLumber.ProtocolBuffer do
     state = %{
       socket: socket,
       transport: transport,
-      buffer: nil,
-      reader: reader,
+      buffer: <<>>,
+      reader: nil,
       demand: 0
     }
-    {:ok, state}
+
+    :gen_server.enter_loop(__MODULE__, [], state)
   end
 
   @impl true
@@ -39,15 +40,17 @@ defmodule ExLumber.ProtocolBuffer do
     {:stop, :normal, state}
   end
 
-  def handle_call({:read_bytes, demand}, state) do
+  @impl true
+  def handle_call({:read_bytes, demand}, from, state) do
     state = Map.put(state, :demand, state.demand + demand)
+    state = Map.put(state, :reader, from)
     dispatch_bytes(state)
   end
 
-  defp dispatch_bytes(state) do
+  defp dispatch_bytes(state = %{demand: demand}) do
     buffer_size = byte_size(state.buffer)
-    if buffer_size >= state.demand do
-      {data, rest} = read_bytes(state.buffer, state.demand)
+    if demand > 0 and buffer_size >= demand do
+      {data, rest} = read_bytes(state.buffer, demand)
       GenServer.reply(state.reader, data)
       {:noreply, %{state | buffer: rest, demand: 0}}
     else
